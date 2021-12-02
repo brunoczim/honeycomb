@@ -27,7 +27,7 @@ where
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum GeneralError<T, I, It> {
     Equals(EqualsError<T, I>),
     NotEquals(NotEqualsError<T, I>),
@@ -35,25 +35,7 @@ pub enum GeneralError<T, I, It> {
     NoneOf(NoneOfError<It, I>),
     UnexpectedEndOfInput(UnexpectedEndOfInput),
     ExpectedEndOfInput(ExpectedEndOfInput<I>),
-}
-
-impl<T, I, It> GeneralError<T, I, It> {
-    pub fn as_dyn(&self) -> &dyn Error
-    where
-        T: fmt::Display + fmt::Debug,
-        I: fmt::Display + fmt::Debug,
-        It: Iterator + Clone + fmt::Debug,
-        It::Item: fmt::Display + fmt::Debug,
-    {
-        match self {
-            GeneralError::Equals(error) => error,
-            GeneralError::NotEquals(error) => error,
-            GeneralError::AnyOf(error) => error,
-            GeneralError::NoneOf(error) => error,
-            GeneralError::UnexpectedEndOfInput(error) => error,
-            GeneralError::ExpectedEndOfInput(error) => error,
-        }
-    }
+    Digit(DigitError<I>),
 }
 
 impl<T, I, It> fmt::Display for GeneralError<T, I, It>
@@ -75,6 +57,7 @@ where
             GeneralError::ExpectedEndOfInput(error) => {
                 write!(formatter, "{}", error)
             },
+            GeneralError::Digit(error) => write!(formatter, "{}", error),
         }
     }
 }
@@ -121,6 +104,12 @@ impl<T, I, It> From<UnexpectedEndOfInput> for GeneralError<T, I, It> {
 impl<T, I, It> From<ExpectedEndOfInput<I>> for GeneralError<T, I, It> {
     fn from(error: ExpectedEndOfInput<I>) -> Self {
         GeneralError::ExpectedEndOfInput(error)
+    }
+}
+
+impl<T, I, It> From<DigitError<I>> for GeneralError<T, I, It> {
+    fn from(error: DigitError<I>) -> Self {
+        GeneralError::Digit(error)
     }
 }
 
@@ -174,7 +163,7 @@ where
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct AnyOfError<It, I> {
     pub expecteds: It,
     pub found: I,
@@ -204,7 +193,7 @@ where
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct NoneOfError<It, I> {
     pub unexpecteds: It,
     pub found: I,
@@ -234,7 +223,7 @@ where
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct UnexpectedEndOfInput;
 
 impl Error for UnexpectedEndOfInput {}
@@ -245,7 +234,7 @@ impl fmt::Display for UnexpectedEndOfInput {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ExpectedEndOfInput<I> {
     pub found: I,
 }
@@ -260,3 +249,24 @@ where
 }
 
 impl<I> Error for ExpectedEndOfInput<I> where I: fmt::Display + fmt::Debug {}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DigitError<I> {
+    pub base: u32,
+    pub found: I,
+}
+
+impl<I> fmt::Display for DigitError<I>
+where
+    I: fmt::Display,
+{
+    fn fmt(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
+        write!(
+            formatter,
+            "expected digit of base {}, found {}",
+            self.base, self.found
+        )
+    }
+}
+
+impl<I> Error for DigitError<I> where I: fmt::Display + fmt::Debug {}
