@@ -49,6 +49,13 @@ pub trait Parser<I>: Sized {
         ErrInto { inner: self, _marker: PhantomData }
     }
 
+    fn map_input<F, J>(self, mapper: F) -> MapInput<Self, F>
+    where
+        F: FnMut(J) -> I,
+    {
+        MapInput { inner: self, mapper }
+    }
+
     fn or<Q>(self, other: Q) -> Or<Self, Q>
     where
         I: Clone,
@@ -173,6 +180,32 @@ where
             Ok(Done(item)) => Ok(Done(item)),
             Ok(Parsing(inner)) => Ok(Parsing(Self { inner, ..self })),
             Err(error) => Err(E::from(error)),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct MapInput<P, F> {
+    inner: P,
+    mapper: F,
+}
+
+impl<P, F, I, J> Parser<J> for MapInput<P, F>
+where
+    P: Parser<I>,
+    F: FnMut(J) -> I,
+{
+    type Output = P::Output;
+    type Error = P::Error;
+
+    fn transit(
+        mut self,
+        input: J,
+    ) -> Result<Transition<Self, Self::Output>, Self::Error> {
+        let actual_input = (self.mapper)(input);
+        match self.inner.transit(actual_input)? {
+            Done(item) => Ok(Done(item)),
+            Parsing(inner) => Ok(Parsing(Self { inner, ..self })),
         }
     }
 }

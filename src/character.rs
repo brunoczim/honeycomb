@@ -39,20 +39,14 @@ where
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Digit {
-    base: u32,
-}
-
-impl Digit {
-    pub fn new(base: u32) -> Self {
-        Self { base }
-    }
+    pub base: u8,
 }
 
 impl<I> Parser<I> for Digit
 where
     I: AsChar,
 {
-    type Output = u32;
+    type Output = u8;
     type Error = DigitError<I>;
 
     fn transit(
@@ -60,8 +54,8 @@ where
         input: I,
     ) -> Result<Transition<Self, Self::Output>, Self::Error> {
         let maybe_ch = input.as_char();
-        match maybe_ch.and_then(|ch| ch.to_digit(self.base)) {
-            Some(value) => Ok(Done(value)),
+        match maybe_ch.and_then(|ch| ch.to_digit(u32::from(self.base))) {
+            Some(value) => Ok(Done(value as u8)),
             None => Err(DigitError { base: self.base, found: input }),
         }
     }

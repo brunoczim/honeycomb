@@ -252,7 +252,7 @@ impl<I> Error for ExpectedEndOfInput<I> where I: fmt::Display + fmt::Debug {}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct DigitError<I> {
-    pub base: u32,
+    pub base: u8,
     pub found: I,
 }
 
