@@ -1,7 +1,24 @@
+use std::convert::Infallible;
+
 use crate::{
     error::{AnyOfError, EqualsError, NoneOfError, NotEqualsError},
     parser::{Done, Parser, Transition},
 };
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default)]
+pub struct Any;
+
+impl<I> Parser<I> for Any {
+    type Output = I;
+    type Error = Infallible;
+
+    fn transit(
+        self,
+        input: I,
+    ) -> Result<Transition<Self, Self::Output>, Self::Error> {
+        Ok(Done(input))
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default)]
 pub struct Equals<T>(pub T);

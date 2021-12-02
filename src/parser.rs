@@ -33,12 +33,12 @@ pub trait Parser<I>: Sized {
         MapErr { inner: self, mapper }
     }
 
-    fn map_res<F, T, E>(self, mapper: F) -> MapResult<Self, F>
+    fn filter_map<F, T, E>(self, mapper: F) -> FilterMap<Self, F>
     where
         I: Clone,
         F: FnOnce(Result<Self::Output, Self::Error>) -> Result<T, E>,
     {
-        MapResult { inner: self, mapper }
+        FilterMap { inner: self, mapper }
     }
 
     fn err_into<E>(self) -> ErrInto<Self, E>
@@ -54,7 +54,7 @@ pub trait Parser<I>: Sized {
         I: Clone,
         Q: Parser<I, Output = Self::Output, Error = Self::Error>,
     {
-        Or { left: self, right: other }
+        Or { state: OrState::Both(self, other) }
     }
 
     fn and<Q, T, U>(self, other: Q) -> And<Self, Q, Self::Output, Q::Output>
@@ -126,12 +126,12 @@ where
 }
 
 #[derive(Debug, Clone, Copy)]
-pub struct MapResult<P, F> {
+pub struct FilterMap<P, F> {
     inner: P,
     mapper: F,
 }
 
-impl<P, F, I, T, E> Parser<I> for MapResult<P, F>
+impl<P, F, I, T, E> Parser<I> for FilterMap<P, F>
 where
     P: Parser<I>,
     F: FnOnce(Result<P::Output, P::Error>) -> Result<T, E>,
@@ -178,9 +178,15 @@ where
 }
 
 #[derive(Debug, Clone, Copy)]
+enum OrState<P, Q> {
+    Both(P, Q),
+    LeftOnly(P),
+    RightOnly(Q),
+}
+
+#[derive(Debug, Clone, Copy)]
 pub struct Or<P, Q> {
-    left: P,
-    right: Q,
+    state: OrState<P, Q>,
 }
 
 impl<P, Q, I> Parser<I> for Or<P, Q>
@@ -196,11 +202,38 @@ where
         self,
         input: I,
     ) -> Result<Transition<Self, Self::Output>, Self::Error> {
-        match self.left.transit(input.clone())? {
-            Done(item) => Ok(Done(item)),
-            Parsing(left) => match self.right.transit(input)? {
+        match self.state {
+            OrState::Both(left, right) => match left.transit(input.clone()) {
+                Ok(Done(item)) => Ok(Done(item)),
+                Ok(Parsing(left)) => match right.transit(input) {
+                    Ok(Done(item)) => Ok(Done(item)),
+                    Ok(Parsing(right)) => {
+                        Ok(Parsing(Self { state: OrState::Both(left, right) }))
+                    },
+                    Err(_) => {
+                        Ok(Parsing(Self { state: OrState::LeftOnly(left) }))
+                    },
+                },
+                Err(_) => match right.transit(input)? {
+                    Done(item) => Ok(Done(item)),
+                    Parsing(right) => {
+                        Ok(Parsing(Self { state: OrState::RightOnly(right) }))
+                    },
+                },
+            },
+
+            OrState::LeftOnly(left) => match left.transit(input)? {
                 Done(item) => Ok(Done(item)),
-                Parsing(right) => Ok(Parsing(Self { left, right })),
+                Parsing(left) => {
+                    Ok(Parsing(Self { state: OrState::LeftOnly(left) }))
+                },
+            },
+
+            OrState::RightOnly(right) => match right.transit(input)? {
+                Done(item) => Ok(Done(item)),
+                Parsing(right) => {
+                    Ok(Parsing(Self { state: OrState::RightOnly(right) }))
+                },
             },
         }
     }
