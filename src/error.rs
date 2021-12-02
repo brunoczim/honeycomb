@@ -105,3 +105,26 @@ where
         )
     }
 }
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UnexpectedEndOfInput;
+
+impl fmt::Display for UnexpectedEndOfInput {
+    fn fmt(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
+        write!(formatter, "unexpected end of input")
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ExpectedEndOfInput<I> {
+    pub found: I,
+}
+
+impl<I> fmt::Display for ExpectedEndOfInput<I>
+where
+    I: fmt::Display,
+{
+    fn fmt(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
+        write!(formatter, "expected end of input, found {}", self.found)
+    }
+}
