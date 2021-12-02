@@ -1,3 +1,3 @@
 pub mod parser;
-pub mod slice;
+pub mod general;
 pub mod error;

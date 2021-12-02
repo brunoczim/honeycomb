@@ -1,4 +1,3 @@
-use crate::error::{EqualsError, NotEqualsError};
 use std::marker::PhantomData;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -292,50 +291,6 @@ where
                     Done(item) => Ok(Done((left_output, item))),
                 }
             },
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default)]
-pub struct Equals<T>(pub T);
-
-impl<T, I> Parser<I> for Equals<T>
-where
-    T: PartialEq<I>,
-{
-    type Output = I;
-    type Error = EqualsError<T, I>;
-
-    fn transit(
-        self,
-        input: I,
-    ) -> Result<Transition<Self, Self::Output>, Self::Error> {
-        if self.0 == input {
-            Ok(Done(input))
-        } else {
-            Err(EqualsError { expected: self.0, found: input })
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default)]
-pub struct NotEquals<T>(pub T);
-
-impl<T, I> Parser<I> for NotEquals<T>
-where
-    T: PartialEq<I>,
-{
-    type Output = I;
-    type Error = NotEqualsError<T, I>;
-
-    fn transit(
-        self,
-        input: I,
-    ) -> Result<Transition<Self, Self::Output>, Self::Error> {
-        if self.0 == input {
-            Err(NotEqualsError { unexpected: self.0, found: input })
-        } else {
-            Ok(Done(input))
         }
     }
 }
