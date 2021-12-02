@@ -1,42 +1,41 @@
-use std::{fmt, marker::PhantomData};
+use std::marker::PhantomData;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub enum Transition<P>
-where
-    P: Parser,
-{
+pub enum Transition<P, T> {
     Parsing(P),
-    Done(P::Output),
+    Done(T),
 }
 
 pub use Transition::*;
 
-pub trait Parser: Sized {
-    type Input: Clone;
+pub trait Parser<I>: Sized {
     type Output;
     type Error;
 
     fn transit(
         self,
-        input: Self::Input,
-    ) -> Result<Transition<Self>, Self::Error>;
+        input: I,
+    ) -> Result<Transition<Self, Self::Output>, Self::Error>;
 
-    fn map<F, T>(self, mapper: F) -> Map<Self, F, T>
+    fn map<F, T>(self, mapper: F) -> Map<Self, F>
     where
+        I: Clone,
         F: FnOnce(Self::Output) -> T,
     {
         Map { inner: self, mapper }
     }
 
-    fn map_err<F, E>(self, mapper: F) -> MapErr<Self, F, E>
+    fn map_err<F, E>(self, mapper: F) -> MapErr<Self, F>
     where
+        I: Clone,
         F: FnOnce(Self::Error) -> E,
     {
         MapErr { inner: self, mapper }
     }
 
-    fn map_res<F, T, E>(self, mapper: F) -> MapResult<Self, F, T, E>
+    fn map_res<F, T, E>(self, mapper: F) -> MapResult<Self, F>
     where
+        I: Clone,
         F: FnOnce(Result<Self::Output, Self::Error>) -> Result<T, E>,
     {
         MapResult { inner: self, mapper }
@@ -44,6 +43,7 @@ pub trait Parser: Sized {
 
     fn err_into<E>(self) -> ErrInto<Self, E>
     where
+        I: Clone,
         E: From<Self::Error>,
     {
         ErrInto { inner: self, _marker: PhantomData }
@@ -51,54 +51,48 @@ pub trait Parser: Sized {
 
     fn or<Q>(self, other: Q) -> Or<Self, Q>
     where
-        Q: Parser<
-            Input = Self::Input,
-            Output = Self::Output,
-            Error = Self::Error,
-        >,
+        I: Clone,
+        Q: Parser<I, Output = Self::Output, Error = Self::Error>,
     {
         Or { left: self, right: other }
     }
 
-    fn and<Q>(self, other: Q) -> And<Self, Q>
+    fn and<Q, T, U>(self, other: Q) -> And<Self, Q, Self::Output, Q::Output>
     where
-        Q: Parser<Input = Self::Input, Error = Self::Error>,
+        I: Clone,
+        Q: Parser<I, Error = Self::Error>,
     {
         And { left: Parsing(self), right: Parsing(other) }
     }
 
-    fn then<Q>(self, second: Q) -> Then<Self, Q>
+    fn then<Q>(self, second: Q) -> Then<Self, Q, Self::Output>
     where
-        Q: Parser<Input = Self::Input, Error = Self::Error>,
+        I: Clone,
+        Q: Parser<I, Error = Self::Error>,
     {
         Then { state: ThenState::ParseLeft { left: self, right: second } }
     }
 }
 
 #[derive(Debug, Clone, Copy)]
-pub struct Map<P, F, T>
-where
-    P: Parser,
-    F: FnOnce(P::Output) -> T,
-{
+pub struct Map<P, F> {
     inner: P,
     mapper: F,
 }
 
-impl<P, F, T> Parser for Map<P, F, T>
+impl<P, F, I, T> Parser<I> for Map<P, F>
 where
-    P: Parser,
+    P: Parser<I>,
     F: FnOnce(P::Output) -> T,
 {
-    type Input = P::Input;
     type Output = T;
     type Error = P::Error;
 
     fn transit(
         self,
-        input: Self::Input,
-    ) -> Result<Transition<Self>, Self::Error> {
-        match self.inner.transit(input.clone())? {
+        input: I,
+    ) -> Result<Transition<Self, Self::Output>, Self::Error> {
+        match self.inner.transit(input)? {
             Done(item) => Ok(Done((self.mapper)(item))),
             Parsing(inner) => Ok(Parsing(Self { inner, ..self })),
         }
@@ -106,29 +100,24 @@ where
 }
 
 #[derive(Debug, Clone, Copy)]
-pub struct MapErr<P, F, E>
-where
-    P: Parser,
-    F: FnOnce(P::Error) -> E,
-{
+pub struct MapErr<P, F> {
     inner: P,
     mapper: F,
 }
 
-impl<P, F, E> Parser for MapErr<P, F, E>
+impl<P, F, I, E> Parser<I> for MapErr<P, F>
 where
-    P: Parser,
+    P: Parser<I>,
     F: FnOnce(P::Error) -> E,
 {
-    type Input = P::Input;
     type Output = P::Output;
     type Error = E;
 
     fn transit(
         self,
-        input: Self::Input,
-    ) -> Result<Transition<Self>, Self::Error> {
-        match self.inner.transit(input.clone()) {
+        input: I,
+    ) -> Result<Transition<Self, Self::Output>, Self::Error> {
+        match self.inner.transit(input) {
             Ok(Done(item)) => Ok(Done(item)),
             Ok(Parsing(inner)) => Ok(Parsing(Self { inner, ..self })),
             Err(error) => Err((self.mapper)(error)),
@@ -137,29 +126,24 @@ where
 }
 
 #[derive(Debug, Clone, Copy)]
-pub struct MapResult<P, F, T, E>
-where
-    P: Parser,
-    F: FnOnce(Result<P::Output, P::Error>) -> Result<T, E>,
-{
+pub struct MapResult<P, F> {
     inner: P,
     mapper: F,
 }
 
-impl<P, F, T, E> Parser for MapResult<P, F, T, E>
+impl<P, F, I, T, E> Parser<I> for MapResult<P, F>
 where
-    P: Parser,
+    P: Parser<I>,
     F: FnOnce(Result<P::Output, P::Error>) -> Result<T, E>,
 {
-    type Input = P::Input;
     type Output = T;
     type Error = E;
 
     fn transit(
         self,
-        input: Self::Input,
-    ) -> Result<Transition<Self>, Self::Error> {
-        match self.inner.transit(input.clone()) {
+        input: I,
+    ) -> Result<Transition<Self, Self::Output>, Self::Error> {
+        match self.inner.transit(input) {
             Ok(Done(item)) => (self.mapper)(Ok(item)).map(Done),
             Ok(Parsing(inner)) => Ok(Parsing(Self { inner, ..self })),
             Err(error) => (self.mapper)(Err(error)).map(Done),
@@ -168,29 +152,24 @@ where
 }
 
 #[derive(Debug, Clone, Copy)]
-pub struct ErrInto<P, E>
-where
-    P: Parser,
-    E: From<P::Error>,
-{
+pub struct ErrInto<P, E> {
     inner: P,
     _marker: PhantomData<E>,
 }
 
-impl<P, E> Parser for ErrInto<P, E>
+impl<P, E, I> Parser<I> for ErrInto<P, E>
 where
-    P: Parser,
+    P: Parser<I>,
     E: From<P::Error>,
 {
-    type Input = P::Input;
     type Output = P::Output;
     type Error = E;
 
     fn transit(
         self,
-        input: Self::Input,
-    ) -> Result<Transition<Self>, Self::Error> {
-        match self.inner.transit(input.clone()) {
+        input: I,
+    ) -> Result<Transition<Self, Self::Output>, Self::Error> {
+        match self.inner.transit(input) {
             Ok(Done(item)) => Ok(Done(item)),
             Ok(Parsing(inner)) => Ok(Parsing(Self { inner, ..self })),
             Err(error) => Err(E::from(error)),
@@ -199,28 +178,24 @@ where
 }
 
 #[derive(Debug, Clone, Copy)]
-pub struct Or<P, Q>
-where
-    P: Parser,
-    Q: Parser<Input = P::Input, Output = P::Output, Error = P::Error>,
-{
+pub struct Or<P, Q> {
     left: P,
     right: Q,
 }
 
-impl<P, Q> Parser for Or<P, Q>
+impl<P, Q, I> Parser<I> for Or<P, Q>
 where
-    P: Parser,
-    Q: Parser<Input = P::Input, Output = P::Output, Error = P::Error>,
+    I: Clone,
+    P: Parser<I>,
+    Q: Parser<I, Output = P::Output, Error = P::Error>,
 {
-    type Input = P::Input;
     type Output = P::Output;
     type Error = P::Error;
 
     fn transit(
         self,
-        input: Self::Input,
-    ) -> Result<Transition<Self>, Self::Error> {
+        input: I,
+    ) -> Result<Transition<Self, Self::Output>, Self::Error> {
         match self.left.transit(input.clone())? {
             Done(item) => Ok(Done(item)),
             Parsing(left) => match self.right.transit(input)? {
@@ -231,28 +206,25 @@ where
     }
 }
 
-pub struct And<P, Q>
-where
-    P: Parser,
-    Q: Parser<Input = P::Input, Error = P::Error>,
-{
-    left: Transition<P>,
-    right: Transition<Q>,
+#[derive(Debug, Clone, Copy)]
+pub struct And<P, Q, T, U> {
+    left: Transition<P, T>,
+    right: Transition<Q, U>,
 }
 
-impl<P, Q> Parser for And<P, Q>
+impl<P, Q, T, U, I> Parser<I> for And<P, Q, T, U>
 where
-    P: Parser,
-    Q: Parser<Input = P::Input, Error = P::Error>,
+    I: Clone,
+    P: Parser<I, Output = T>,
+    Q: Parser<I, Error = P::Error, Output = U>,
 {
-    type Input = P::Input;
     type Output = (P::Output, Q::Output);
     type Error = P::Error;
 
     fn transit(
         self,
-        input: Self::Input,
-    ) -> Result<Transition<Self>, Self::Error> {
+        input: I,
+    ) -> Result<Transition<Self, Self::Output>, Self::Error> {
         let left = match self.left {
             Parsing(parser) => parser.transit(input.clone())?,
             Done(item) => Done(item),
@@ -270,74 +242,30 @@ where
     }
 }
 
-impl<P, Q> fmt::Debug for And<P, Q>
-where
-    P: Parser + fmt::Debug,
-    Q: Parser<Input = P::Input, Error = P::Error> + fmt::Debug,
-    P::Output: fmt::Debug,
-    Q::Output: fmt::Debug,
-{
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter
-            .debug_struct("And")
-            .field("left", &self.left)
-            .field("right", &self.right)
-            .finish()
-    }
-}
-
-impl<P, Q> Clone for And<P, Q>
-where
-    P: Parser + Clone,
-    Q: Parser<Input = P::Input, Error = P::Error> + Clone,
-    P::Output: Clone,
-    Q::Output: Clone,
-{
-    fn clone(&self) -> Self {
-        Self { left: self.left.clone(), right: self.right.clone() }
-    }
-}
-
-impl<P, Q> Copy for And<P, Q>
-where
-    P: Parser + Copy,
-    Q: Parser<Input = P::Input, Error = P::Error> + Copy,
-    P::Output: Copy,
-    Q::Output: Copy,
-{
+#[derive(Debug, Clone, Copy)]
+enum ThenState<P, Q, T> {
+    ParseLeft { left: P, right: Q },
+    ParseRight { left_output: T, right: Q },
 }
 
 #[derive(Debug, Clone, Copy)]
-enum ThenState<P, Q>
-where
-    P: Parser,
-    Q: Parser<Input = P::Input, Error = P::Error>,
-{
-    ParseLeft { left: P, right: Q },
-    ParseRight { left_output: P::Output, right: Q },
+pub struct Then<P, Q, T> {
+    state: ThenState<P, Q, T>,
 }
 
-pub struct Then<P, Q>
+impl<P, Q, T, I> Parser<I> for Then<P, Q, T>
 where
-    P: Parser,
-    Q: Parser<Input = P::Input, Error = P::Error>,
+    I: Clone,
+    P: Parser<I, Output = T>,
+    Q: Parser<I, Error = P::Error>,
 {
-    state: ThenState<P, Q>,
-}
-
-impl<P, Q> Parser for Then<P, Q>
-where
-    P: Parser,
-    Q: Parser<Input = P::Input, Error = P::Error>,
-{
-    type Input = P::Input;
     type Output = (P::Output, Q::Output);
     type Error = P::Error;
 
     fn transit(
         self,
-        input: Self::Input,
-    ) -> Result<Transition<Self>, Self::Error> {
+        input: I,
+    ) -> Result<Transition<Self, Self::Output>, Self::Error> {
         match self.state {
             ThenState::ParseLeft { left, right } => {
                 match left.transit(input.clone())? {
@@ -365,37 +293,4 @@ where
             },
         }
     }
-}
-
-impl<P, Q> fmt::Debug for Then<P, Q>
-where
-    P: Parser + fmt::Debug,
-    Q: Parser<Input = P::Input, Error = P::Error> + fmt::Debug,
-    P::Output: fmt::Debug,
-    Q::Output: fmt::Debug,
-{
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.debug_struct("Then").field("state", &self.state).finish()
-    }
-}
-
-impl<P, Q> Clone for Then<P, Q>
-where
-    P: Parser + Clone,
-    Q: Parser<Input = P::Input, Error = P::Error> + Clone,
-    P::Output: Clone,
-    Q::Output: Clone,
-{
-    fn clone(&self) -> Self {
-        Self { state: self.state.clone() }
-    }
-}
-
-impl<P, Q> Copy for Then<P, Q>
-where
-    P: Parser + Copy,
-    Q: Parser<Input = P::Input, Error = P::Error> + Copy,
-    P::Output: Copy,
-    Q::Output: Copy,
-{
 }
