@@ -12,13 +12,13 @@ where
 pub use Transition::*;
 
 pub trait Parser: Sized {
-    type Input: ?Sized;
+    type Input: Clone;
     type Output;
     type Error;
 
     fn transit(
         self,
-        input: &Self::Input,
+        input: Self::Input,
     ) -> Result<Transition<Self>, Self::Error>;
 
     fn map<F, T>(self, mapper: F) -> Map<Self, F, T>
@@ -96,9 +96,9 @@ where
 
     fn transit(
         self,
-        input: &Self::Input,
+        input: Self::Input,
     ) -> Result<Transition<Self>, Self::Error> {
-        match self.inner.transit(input)? {
+        match self.inner.transit(input.clone())? {
             Done(item) => Ok(Done((self.mapper)(item))),
             Parsing(inner) => Ok(Parsing(Self { inner, ..self })),
         }
@@ -126,9 +126,9 @@ where
 
     fn transit(
         self,
-        input: &Self::Input,
+        input: Self::Input,
     ) -> Result<Transition<Self>, Self::Error> {
-        match self.inner.transit(input) {
+        match self.inner.transit(input.clone()) {
             Ok(Done(item)) => Ok(Done(item)),
             Ok(Parsing(inner)) => Ok(Parsing(Self { inner, ..self })),
             Err(error) => Err((self.mapper)(error)),
@@ -157,9 +157,9 @@ where
 
     fn transit(
         self,
-        input: &Self::Input,
+        input: Self::Input,
     ) -> Result<Transition<Self>, Self::Error> {
-        match self.inner.transit(input) {
+        match self.inner.transit(input.clone()) {
             Ok(Done(item)) => (self.mapper)(Ok(item)).map(Done),
             Ok(Parsing(inner)) => Ok(Parsing(Self { inner, ..self })),
             Err(error) => (self.mapper)(Err(error)).map(Done),
@@ -188,9 +188,9 @@ where
 
     fn transit(
         self,
-        input: &Self::Input,
+        input: Self::Input,
     ) -> Result<Transition<Self>, Self::Error> {
-        match self.inner.transit(input) {
+        match self.inner.transit(input.clone()) {
             Ok(Done(item)) => Ok(Done(item)),
             Ok(Parsing(inner)) => Ok(Parsing(Self { inner, ..self })),
             Err(error) => Err(E::from(error)),
@@ -219,9 +219,9 @@ where
 
     fn transit(
         self,
-        input: &Self::Input,
+        input: Self::Input,
     ) -> Result<Transition<Self>, Self::Error> {
-        match self.left.transit(input)? {
+        match self.left.transit(input.clone())? {
             Done(item) => Ok(Done(item)),
             Parsing(left) => match self.right.transit(input)? {
                 Done(item) => Ok(Done(item)),
@@ -251,10 +251,10 @@ where
 
     fn transit(
         self,
-        input: &Self::Input,
+        input: Self::Input,
     ) -> Result<Transition<Self>, Self::Error> {
         let left = match self.left {
-            Parsing(parser) => parser.transit(input)?,
+            Parsing(parser) => parser.transit(input.clone())?,
             Done(item) => Done(item),
         };
 
@@ -336,11 +336,11 @@ where
 
     fn transit(
         self,
-        input: &Self::Input,
+        input: Self::Input,
     ) -> Result<Transition<Self>, Self::Error> {
         match self.state {
             ThenState::ParseLeft { left, right } => {
-                match left.transit(input)? {
+                match left.transit(input.clone())? {
                     Parsing(left) => Ok(Parsing(Self {
                         state: ThenState::ParseLeft { left, right },
                     })),
