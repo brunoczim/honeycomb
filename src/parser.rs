@@ -203,3 +203,18 @@ where
         self.dyn_clone()
     }
 }
+
+pub struct FnParser<F>(pub F);
+
+impl<F, I, T, E, Ef> Parser<I> for FnParser<F>
+where
+    F: FnMut(I) -> Result<Transition<(), T, E>, Ef>,
+{
+    type Output = T;
+    type Error = E;
+    type Fatal = Ef;
+
+    fn transit(mut self, input: I) -> TransitResult<Self, I> {
+        (self.0)(input).map(|transition| transition.map_parser(|_| self))
+    }
+}
