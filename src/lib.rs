@@ -6,6 +6,7 @@
 //! use honeycomb::error::GeneralError;
 //! use honeycomb::element::Equals;
 //! use honeycomb::character::{AsChar, Digit};
+//! use std::error::Error;
 //!
 //! #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 //! pub struct Rgb {
@@ -14,14 +15,14 @@
 //!     blue: u8,
 //! }
 //!
-//! fn channel_parser<I>() -> impl Parser<I, Output = u8, Error = GeneralError<I>
+//! fn channel_parser<T, I, It>() -> impl Parser<I, Output = u8, Error = GeneralError<T, I, It>>
 //! where
 //!     I: AsChar
 //! {
 //!     Digit { base: 16 }.then(Digit { base: 16 }).map(|(high, low)| (high << 4) | low)
 //! }
 //!
-//! pub fn color_parser<I>() -> impl Parser<I, Output = Rgb, Error = GeneralError>
+//! pub fn color_parser<T, I, It>() -> impl Parser<I, Output = Rgb, Error = GeneralError<T, I, It>>
 //! where
 //!     I: AsChar,
 //! {
@@ -32,14 +33,16 @@
 //!         .map(|(((_, red), green), blue)| Rgb { red, green, blue })
 //! }
 //!
-//! pub fn parse_color(input: &str) -> Result<Rgb, GeneralError> {
+//! pub fn parse_color(input: &str) -> Result<Rgb, GeneralError<T, I, It>> {
 //!     parse_iter_complete(color_parser(), input.chars())
 //! }
 //! ```
 
 pub mod parser;
-pub mod error;
 pub mod combinator;
+/*
+pub mod error;
 pub mod element;
 pub mod character;
 pub mod stream;
+*/

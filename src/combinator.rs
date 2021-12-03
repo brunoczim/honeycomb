@@ -1,333 +1,525 @@
-use crate::parser::{Done, Parser, Parsing, Transition};
-use std::marker::PhantomData;
+use crate::parser::{Parser, TransitResult, Transition};
+use std::{fmt, marker::PhantomData};
 
-#[derive(Debug, Clone, Copy)]
-pub struct Map<P, F> {
-    inner: P,
-    mapper: F,
-}
-
-impl<P, F> Map<P, F> {
-    pub(crate) fn new(parser: P, mapper: F) -> Self {
-        Self { inner: parser, mapper }
-    }
-}
-
-impl<P, F, I, T> Parser<I> for Map<P, F>
+pub struct Map<P, I, F, T>
 where
     P: Parser<I>,
     F: FnOnce(P::Output) -> T,
 {
-    type Output = T;
+    inner: P,
+    mapper: F,
+    _marker: PhantomData<(I, T)>,
+}
+
+impl<P, I, F, T> Map<P, I, F, T>
+where
+    P: Parser<I>,
+    F: FnOnce(P::Output) -> T,
+{
+    pub(super) fn new(inner: P, mapper: F) -> Self {
+        Self { inner, mapper, _marker: PhantomData }
+    }
+}
+
+impl<P, I, F, T> Parser<I> for Map<P, I, F, T>
+where
+    P: Parser<I>,
+    F: FnOnce(P::Output) -> T,
+{
+    type Output = F::Output;
     type Error = P::Error;
+    type Fatal = P::Fatal;
 
-    fn transit(
-        self,
-        input: I,
-    ) -> Result<Transition<Self, Self::Output>, Self::Error> {
+    fn transit(self, input: I) -> TransitResult<Self, I> {
         match self.inner.transit(input)? {
-            Done(item) => Ok(Done((self.mapper)(item))),
-            Parsing(inner) => Ok(Parsing(Self { inner, ..self })),
+            Transition::Done { output } => {
+                Ok(Transition::Done { output: (self.mapper)(output) })
+            },
+            Transition::Parsing { parser, error } => Ok(Transition::Parsing {
+                parser: Map { inner: parser, ..self },
+                error,
+            }),
         }
     }
 }
 
-#[derive(Debug, Clone, Copy)]
-pub struct MapErr<P, F> {
-    inner: P,
-    mapper: F,
-}
-
-impl<P, F> MapErr<P, F> {
-    pub(crate) fn new(parser: P, mapper: F) -> Self {
-        Self { inner: parser, mapper }
+impl<P, I, F, T> fmt::Debug for Map<P, I, F, T>
+where
+    P: Parser<I> + fmt::Debug,
+    F: FnOnce(P::Output) -> T + fmt::Debug,
+{
+    fn fmt(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
+        formatter
+            .debug_struct("Map")
+            .field("inner", &self.inner)
+            .field("mapper", &self.mapper)
+            .finish()
     }
 }
 
-impl<P, F, I, E> Parser<I> for MapErr<P, F>
+impl<P, I, F, T> Clone for Map<P, I, F, T>
+where
+    P: Parser<I> + Clone,
+    F: FnOnce(P::Output) -> T + Clone,
+{
+    fn clone(&self) -> Self {
+        Self {
+            inner: self.inner.clone(),
+            mapper: self.mapper.clone(),
+            _marker: PhantomData,
+        }
+    }
+}
+
+impl<P, I, F, T> Copy for Map<P, I, F, T>
+where
+    P: Parser<I> + Copy,
+    F: FnOnce(P::Output) -> T + Copy,
+{
+}
+
+pub struct MapInput<P, I, J, F>
 where
     P: Parser<I>,
-    F: FnOnce(P::Error) -> E,
+    F: FnMut(J) -> I,
 {
-    type Output = P::Output;
-    type Error = E;
-
-    fn transit(
-        self,
-        input: I,
-    ) -> Result<Transition<Self, Self::Output>, Self::Error> {
-        match self.inner.transit(input) {
-            Ok(Done(item)) => Ok(Done(item)),
-            Ok(Parsing(inner)) => Ok(Parsing(Self { inner, ..self })),
-            Err(error) => Err((self.mapper)(error)),
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy)]
-pub struct FilterMap<P, F> {
     inner: P,
     mapper: F,
+    _marker: PhantomData<(I, J)>,
 }
 
-impl<P, F> FilterMap<P, F> {
-    pub(crate) fn new(parser: P, mapper: F) -> Self {
-        Self { inner: parser, mapper }
-    }
-}
-
-impl<P, F, I, T, E> Parser<I> for FilterMap<P, F>
+impl<P, I, J, F> MapInput<P, I, J, F>
 where
     P: Parser<I>,
-    F: FnOnce(Result<P::Output, P::Error>) -> Result<T, E>,
+    F: FnMut(J) -> I,
 {
-    type Output = T;
-    type Error = E;
-
-    fn transit(
-        self,
-        input: I,
-    ) -> Result<Transition<Self, Self::Output>, Self::Error> {
-        match self.inner.transit(input) {
-            Ok(Done(item)) => (self.mapper)(Ok(item)).map(Done),
-            Ok(Parsing(inner)) => Ok(Parsing(Self { inner, ..self })),
-            Err(error) => (self.mapper)(Err(error)).map(Done),
-        }
+    pub(super) fn new(inner: P, mapper: F) -> Self {
+        Self { inner, mapper, _marker: PhantomData }
     }
 }
 
-#[derive(Debug, Clone, Copy)]
-pub struct ErrInto<P, E> {
-    inner: P,
-    _marker: PhantomData<E>,
-}
-
-impl<P, E> ErrInto<P, E> {
-    pub(crate) fn new(parser: P) -> Self {
-        Self { inner: parser, _marker: PhantomData }
-    }
-}
-
-impl<P, E, I> Parser<I> for ErrInto<P, E>
-where
-    P: Parser<I>,
-    E: From<P::Error>,
-{
-    type Output = P::Output;
-    type Error = E;
-
-    fn transit(
-        self,
-        input: I,
-    ) -> Result<Transition<Self, Self::Output>, Self::Error> {
-        match self.inner.transit(input) {
-            Ok(Done(item)) => Ok(Done(item)),
-            Ok(Parsing(inner)) => Ok(Parsing(Self { inner, ..self })),
-            Err(error) => Err(E::from(error)),
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy)]
-pub struct MapInput<P, F> {
-    inner: P,
-    mapper: F,
-}
-
-impl<P, F> MapInput<P, F> {
-    pub(crate) fn new(parser: P, mapper: F) -> Self {
-        Self { inner: parser, mapper }
-    }
-}
-
-impl<P, F, I, J> Parser<J> for MapInput<P, F>
+impl<P, I, J, F> Parser<J> for MapInput<P, I, J, F>
 where
     P: Parser<I>,
     F: FnMut(J) -> I,
 {
     type Output = P::Output;
     type Error = P::Error;
+    type Fatal = P::Fatal;
 
-    fn transit(
-        mut self,
-        input: J,
-    ) -> Result<Transition<Self, Self::Output>, Self::Error> {
-        let actual_input = (self.mapper)(input);
-        match self.inner.transit(actual_input)? {
-            Done(item) => Ok(Done(item)),
-            Parsing(inner) => Ok(Parsing(Self { inner, ..self })),
+    fn transit(mut self, input: J) -> TransitResult<Self, J> {
+        match self.inner.transit((self.mapper)(input))? {
+            Transition::Done { output } => Ok(Transition::Done { output }),
+            Transition::Parsing { parser, error } => Ok(Transition::Parsing {
+                parser: MapInput { inner: parser, ..self },
+                error,
+            }),
         }
     }
 }
 
-#[derive(Debug, Clone, Copy)]
-enum OrState<P, Q> {
-    Both(P, Q),
-    LeftOnly(P),
-    RightOnly(Q),
-}
-
-#[derive(Debug, Clone, Copy)]
-pub struct Or<P, Q> {
-    state: OrState<P, Q>,
-}
-
-impl<P, Q> Or<P, Q> {
-    pub(crate) fn new(left: P, right: Q) -> Self {
-        Self { state: OrState::Both(left, right) }
+impl<P, I, J, F> fmt::Debug for MapInput<P, I, J, F>
+where
+    P: Parser<I> + fmt::Debug,
+    F: FnMut(J) -> I + fmt::Debug,
+{
+    fn fmt(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
+        formatter
+            .debug_struct("MapInput")
+            .field("inner", &self.inner)
+            .field("mapper", &self.mapper)
+            .finish()
     }
 }
 
-impl<P, Q, I> Parser<I> for Or<P, Q>
+impl<P, I, J, F> Clone for MapInput<P, I, J, F>
 where
-    I: Clone,
+    P: Parser<I> + Clone,
+    F: FnMut(J) -> I + Clone,
+{
+    fn clone(&self) -> Self {
+        Self {
+            inner: self.inner.clone(),
+            mapper: self.mapper.clone(),
+            _marker: PhantomData,
+        }
+    }
+}
+
+impl<P, I, J, F> Copy for MapInput<P, I, J, F>
+where
+    P: Parser<I> + Copy,
+    F: FnMut(J) -> I + Copy,
+{
+}
+
+pub struct MapError<P, I, F, E>
+where
     P: Parser<I>,
-    Q: Parser<I, Output = P::Output, Error = P::Error>,
+    F: FnMut(P::Error) -> E,
+{
+    inner: P,
+    mapper: F,
+    _marker: PhantomData<(I, E)>,
+}
+
+impl<P, I, F, E> MapError<P, I, F, E>
+where
+    P: Parser<I>,
+    F: FnMut(P::Error) -> E,
+{
+    pub(super) fn new(inner: P, mapper: F) -> Self {
+        Self { inner, mapper, _marker: PhantomData }
+    }
+}
+
+impl<P, I, F, E> Parser<I> for MapError<P, I, F, E>
+where
+    P: Parser<I>,
+    F: FnMut(P::Error) -> E,
+{
+    type Output = P::Output;
+    type Error = F::Output;
+    type Fatal = P::Fatal;
+
+    fn transit(mut self, input: I) -> TransitResult<Self, I> {
+        match self.inner.transit(input)? {
+            Transition::Done { output } => Ok(Transition::Done { output }),
+            Transition::Parsing { parser, error } => Ok(Transition::Parsing {
+                error: error.map(&mut self.mapper),
+                parser: Self { inner: parser, ..self },
+            }),
+        }
+    }
+}
+
+impl<P, I, F, E> fmt::Debug for MapError<P, I, F, E>
+where
+    P: Parser<I> + fmt::Debug,
+    F: FnMut(P::Error) -> E + fmt::Debug,
+{
+    fn fmt(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
+        formatter
+            .debug_struct("MapError")
+            .field("inner", &self.inner)
+            .field("mapper", &self.mapper)
+            .finish()
+    }
+}
+
+impl<P, I, F, E> Clone for MapError<P, I, F, E>
+where
+    P: Parser<I> + Clone,
+    F: FnMut(P::Error) -> E + Clone,
+{
+    fn clone(&self) -> Self {
+        Self {
+            inner: self.inner.clone(),
+            mapper: self.mapper.clone(),
+            _marker: PhantomData,
+        }
+    }
+}
+
+impl<P, I, F, E> Copy for MapError<P, I, F, E>
+where
+    P: Parser<I> + Copy,
+    F: FnMut(P::Error) -> E + Copy,
+{
+}
+
+pub struct MapFatal<P, I, F, Ef>
+where
+    P: Parser<I>,
+    F: FnOnce(P::Fatal) -> Ef,
+{
+    inner: P,
+    mapper: F,
+    _marker: PhantomData<(I, Ef)>,
+}
+
+impl<P, I, F, Ef> MapFatal<P, I, F, Ef>
+where
+    P: Parser<I>,
+    F: FnOnce(P::Fatal) -> Ef,
+{
+    pub(super) fn new(inner: P, mapper: F) -> Self {
+        Self { inner, mapper, _marker: PhantomData }
+    }
+}
+
+impl<P, I, F, Ef> Parser<I> for MapFatal<P, I, F, Ef>
+where
+    P: Parser<I>,
+    F: FnOnce(P::Fatal) -> Ef,
 {
     type Output = P::Output;
     type Error = P::Error;
+    type Fatal = F::Output;
 
-    fn transit(
-        self,
-        input: I,
-    ) -> Result<Transition<Self, Self::Output>, Self::Error> {
-        match self.state {
-            OrState::Both(left, right) => match left.transit(input.clone()) {
-                Ok(Done(item)) => Ok(Done(item)),
-                Ok(Parsing(left)) => match right.transit(input) {
-                    Ok(Done(item)) => Ok(Done(item)),
-                    Ok(Parsing(right)) => {
-                        Ok(Parsing(Self { state: OrState::Both(left, right) }))
-                    },
-                    Err(_) => {
-                        Ok(Parsing(Self { state: OrState::LeftOnly(left) }))
-                    },
-                },
-                Err(_) => match right.transit(input)? {
-                    Done(item) => Ok(Done(item)),
-                    Parsing(right) => {
-                        Ok(Parsing(Self { state: OrState::RightOnly(right) }))
-                    },
-                },
+    fn transit(self, input: I) -> TransitResult<Self, I> {
+        match self.inner.transit(input) {
+            Ok(Transition::Done { output }) => Ok(Transition::Done { output }),
+            Ok(Transition::Parsing { parser, error }) => {
+                Ok(Transition::Parsing {
+                    parser: Self { inner: parser, ..self },
+                    error,
+                })
             },
-
-            OrState::LeftOnly(left) => match left.transit(input)? {
-                Done(item) => Ok(Done(item)),
-                Parsing(left) => {
-                    Ok(Parsing(Self { state: OrState::LeftOnly(left) }))
-                },
-            },
-
-            OrState::RightOnly(right) => match right.transit(input)? {
-                Done(item) => Ok(Done(item)),
-                Parsing(right) => {
-                    Ok(Parsing(Self { state: OrState::RightOnly(right) }))
-                },
-            },
+            Err(error) => Err((self.mapper)(error)),
         }
     }
 }
 
-#[derive(Debug, Clone, Copy)]
-pub struct And<P, Q, T, U> {
-    left: Transition<P, T>,
-    right: Transition<Q, U>,
+impl<P, I, F, Ef> fmt::Debug for MapFatal<P, I, F, Ef>
+where
+    P: Parser<I> + fmt::Debug,
+    F: FnOnce(P::Fatal) -> Ef + fmt::Debug,
+{
+    fn fmt(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
+        formatter
+            .debug_struct("MapError")
+            .field("inner", &self.inner)
+            .field("mapper", &self.mapper)
+            .finish()
+    }
 }
 
-impl<P, Q, T, U> And<P, Q, T, U> {
-    pub(crate) fn new(left: P, right: Q) -> Self {
+impl<P, I, F, Ef> Clone for MapFatal<P, I, F, Ef>
+where
+    P: Parser<I> + Clone,
+    F: FnOnce(P::Fatal) -> Ef + Clone,
+{
+    fn clone(&self) -> Self {
         Self {
-            left: Transition::Parsing(left),
-            right: Transition::Parsing(right),
+            inner: self.inner.clone(),
+            mapper: self.mapper.clone(),
+            _marker: PhantomData,
         }
     }
 }
 
-impl<P, Q, T, U, I> Parser<I> for And<P, Q, T, U>
+impl<P, I, F, Ef> Copy for MapFatal<P, I, F, Ef>
 where
-    I: Clone,
-    P: Parser<I, Output = T>,
-    Q: Parser<I, Error = P::Error, Output = U>,
+    P: Parser<I> + Copy,
+    F: FnOnce(P::Fatal) -> Ef + Copy,
 {
-    type Output = (P::Output, Q::Output);
-    type Error = P::Error;
+}
 
-    fn transit(
-        self,
-        input: I,
-    ) -> Result<Transition<Self, Self::Output>, Self::Error> {
-        let left = match self.left {
-            Parsing(parser) => parser.transit(input.clone())?,
-            Done(item) => Done(item),
+pub struct MapResult<P, I, F, T, Ef>
+where
+    P: Parser<I>,
+    F: FnOnce(Result<P::Output, P::Fatal>) -> Result<T, Ef>,
+{
+    inner: P,
+    mapper: F,
+    _marker: PhantomData<(I, T, Ef)>,
+}
+
+impl<P, I, F, T, Ef> MapResult<P, I, F, T, Ef>
+where
+    P: Parser<I>,
+    F: FnOnce(Result<P::Output, P::Fatal>) -> Result<T, Ef>,
+{
+    pub(super) fn new(inner: P, mapper: F) -> Self {
+        Self { inner, mapper, _marker: PhantomData }
+    }
+}
+
+impl<P, I, F, T, Ef> Parser<I> for MapResult<P, I, F, T, Ef>
+where
+    P: Parser<I>,
+    F: FnOnce(Result<P::Output, P::Fatal>) -> Result<T, Ef>,
+{
+    type Output = T;
+    type Error = P::Error;
+    type Fatal = Ef;
+
+    fn transit(self, input: I) -> TransitResult<Self, I> {
+        let result = match self.inner.transit(input) {
+            Ok(Transition::Done { output }) => (self.mapper)(Ok(output)),
+            Ok(Transition::Parsing { parser, error }) => {
+                return Ok(Transition::Parsing {
+                    parser: Self { inner: parser, ..self },
+                    error,
+                });
+            },
+            Err(error) => (self.mapper)(Err(error)),
         };
 
-        let right = match self.right {
-            Parsing(parser) => parser.transit(input)?,
-            Done(item) => Done(item),
-        };
-
-        match (left, right) {
-            (Done(first), Done(second)) => Ok(Done((first, second))),
-            (left, right) => Ok(Parsing(Self { left, right })),
+        match result {
+            Ok(output) => Ok(Transition::Done { output }),
+            Err(error) => Err(error),
         }
     }
 }
 
-#[derive(Debug, Clone, Copy)]
-enum ThenState<P, Q, T> {
-    ParseLeft { left: P, right: Q },
-    ParseRight { left_output: T, right: Q },
-}
-
-#[derive(Debug, Clone, Copy)]
-pub struct Then<P, Q, T> {
-    state: ThenState<P, Q, T>,
-}
-
-impl<P, Q, T> Then<P, Q, T> {
-    pub(crate) fn new(left: P, right: Q) -> Self {
-        Self { state: ThenState::ParseLeft { left, right } }
-    }
-}
-
-impl<P, Q, T, I> Parser<I> for Then<P, Q, T>
+impl<P, I, F, T, Ef> fmt::Debug for MapResult<P, I, F, T, Ef>
 where
-    I: Clone,
-    P: Parser<I, Output = T>,
-    Q: Parser<I, Error = P::Error>,
+    P: Parser<I> + fmt::Debug,
+    F: FnOnce(Result<P::Output, P::Fatal>) -> Result<T, Ef> + fmt::Debug,
 {
-    type Output = (P::Output, Q::Output);
-    type Error = P::Error;
+    fn fmt(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
+        formatter
+            .debug_struct("MapResult")
+            .field("inner", &self.inner)
+            .field("mapper", &self.mapper)
+            .finish()
+    }
+}
 
-    fn transit(
-        self,
-        input: I,
-    ) -> Result<Transition<Self, Self::Output>, Self::Error> {
-        match self.state {
-            ThenState::ParseLeft { left, right } => {
-                match left.transit(input.clone())? {
-                    Parsing(left) => Ok(Parsing(Self {
-                        state: ThenState::ParseLeft { left, right },
-                    })),
-
-                    Done(item) => Ok(Parsing(Self {
-                        state: ThenState::ParseRight {
-                            left_output: item,
-                            right,
-                        },
-                    })),
-                }
-            },
-
-            ThenState::ParseRight { left_output, right } => {
-                match right.transit(input)? {
-                    Parsing(right) => Ok(Parsing(Self {
-                        state: ThenState::ParseRight { left_output, right },
-                    })),
-
-                    Done(item) => Ok(Done((left_output, item))),
-                }
-            },
+impl<P, I, F, T, Ef> Clone for MapResult<P, I, F, T, Ef>
+where
+    P: Parser<I> + Clone,
+    F: FnOnce(Result<P::Output, P::Fatal>) -> Result<T, Ef> + Clone,
+{
+    fn clone(&self) -> Self {
+        Self {
+            inner: self.inner.clone(),
+            mapper: self.mapper.clone(),
+            _marker: PhantomData,
         }
     }
+}
+
+impl<P, I, F, T, Ef> Copy for MapResult<P, I, F, T, Ef>
+where
+    P: Parser<I> + Copy,
+    F: FnOnce(Result<P::Output, P::Fatal>) -> Result<T, Ef> + Copy,
+{
+}
+
+pub struct ErrorInto<P, I, E>
+where
+    P: Parser<I>,
+    E: From<P::Error>,
+{
+    inner: P,
+    _marker: PhantomData<(I, E)>,
+}
+
+impl<P, I, E> ErrorInto<P, I, E>
+where
+    P: Parser<I>,
+    E: From<P::Error>,
+{
+    pub(super) fn new(inner: P) -> Self {
+        Self { inner, _marker: PhantomData }
+    }
+}
+
+impl<P, I, E> Parser<I> for ErrorInto<P, I, E>
+where
+    P: Parser<I>,
+    E: From<P::Error>,
+{
+    type Output = P::Output;
+    type Error = E;
+    type Fatal = P::Fatal;
+
+    fn transit(self, input: I) -> TransitResult<Self, I> {
+        match self.inner.transit(input)? {
+            Transition::Done { output } => Ok(Transition::Done { output }),
+            Transition::Parsing { parser, error } => Ok(Transition::Parsing {
+                parser: Self { inner: parser, ..self },
+                error: error.map(Into::into),
+            }),
+        }
+    }
+}
+
+impl<P, I, E> fmt::Debug for ErrorInto<P, I, E>
+where
+    P: Parser<I> + fmt::Debug,
+    E: From<P::Error> + fmt::Debug,
+{
+    fn fmt(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
+        formatter.debug_struct("ErrorInto").field("inner", &self.inner).finish()
+    }
+}
+
+impl<P, I, E> Clone for ErrorInto<P, I, E>
+where
+    P: Parser<I> + Clone,
+    E: From<P::Error> + Clone,
+{
+    fn clone(&self) -> Self {
+        Self { inner: self.inner.clone(), _marker: PhantomData }
+    }
+}
+
+impl<P, I, E> Copy for ErrorInto<P, I, E>
+where
+    P: Parser<I> + Copy,
+    E: From<P::Error> + Copy,
+{
+}
+
+pub struct FatalInto<P, I, Ef>
+where
+    P: Parser<I>,
+    Ef: From<P::Fatal>,
+{
+    inner: P,
+    _marker: PhantomData<(I, Ef)>,
+}
+
+impl<P, I, Ef> FatalInto<P, I, Ef>
+where
+    P: Parser<I>,
+    Ef: From<P::Fatal>,
+{
+    pub(super) fn new(inner: P) -> Self {
+        Self { inner, _marker: PhantomData }
+    }
+}
+
+impl<P, I, Ef> Parser<I> for FatalInto<P, I, Ef>
+where
+    P: Parser<I>,
+    Ef: From<P::Fatal>,
+{
+    type Output = P::Output;
+    type Error = P::Error;
+    type Fatal = Ef;
+
+    fn transit(self, input: I) -> TransitResult<Self, I> {
+        match self.inner.transit(input) {
+            Ok(Transition::Done { output }) => Ok(Transition::Done { output }),
+            Ok(Transition::Parsing { parser, error }) => {
+                Ok(Transition::Parsing {
+                    parser: Self { inner: parser, ..self },
+                    error,
+                })
+            },
+            Err(error) => Err(error.into()),
+        }
+    }
+}
+
+impl<P, I, Ef> fmt::Debug for FatalInto<P, I, Ef>
+where
+    P: Parser<I> + fmt::Debug,
+    Ef: From<P::Fatal> + fmt::Debug,
+{
+    fn fmt(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
+        formatter.debug_struct("FatalInto").field("inner", &self.inner).finish()
+    }
+}
+
+impl<P, I, Ef> Clone for FatalInto<P, I, Ef>
+where
+    P: Parser<I> + Clone,
+    Ef: From<P::Fatal> + Clone,
+{
+    fn clone(&self) -> Self {
+        Self { inner: self.inner.clone(), _marker: PhantomData }
+    }
+}
+
+impl<P, I, Ef> Copy for FatalInto<P, I, Ef>
+where
+    P: Parser<I> + Copy,
+    Ef: From<P::Fatal> + Copy,
+{
 }
