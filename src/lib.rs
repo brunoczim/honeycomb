@@ -40,9 +40,4 @@
 
 pub mod parser;
 pub mod combinator;
-/*
 pub mod error;
-pub mod element;
-pub mod character;
-pub mod stream;
-*/

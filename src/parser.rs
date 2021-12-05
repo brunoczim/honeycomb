@@ -1,220 +1,86 @@
-use crate::combinator::{
-    ErrorInto,
-    FatalInto,
-    Map,
-    MapError,
-    MapFatal,
-    MapInput,
-    MapResult,
-};
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub enum Transition<P, T, E> {
-    Done { output: T },
-    Parsing { parser: P, error: Option<E> },
+pub struct RecovFailure<A, E> {
+    pub output: A,
+    pub errors: E,
 }
 
-impl<P, T, E> Transition<P, T, E> {
-    pub fn map_output<F, U>(self, mapper: F) -> Transition<P, U, E>
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct FatalFailure<E> {
+    pub errors: E,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum Transition<A, E> {
+    AlreadyDone,
+    Parsing,
+    Success(A),
+    Failure(RecovFailure<A, E>),
+    Fatal(FatalFailure<E>),
+}
+
+impl<A, E> Transition<A, E> {
+    pub fn map_output<F, B>(self, mapper: F) -> Transition<B, E>
     where
-        F: FnOnce(T) -> U,
+        F: FnOnce(A) -> B,
     {
         match self {
-            Transition::Done { output } => {
-                Transition::Done { output: mapper(output) }
-            },
-            Transition::Parsing { parser, error } => {
-                Transition::Parsing { parser, error }
-            },
+            Transition::AlreadyDone => Transition::AlreadyDone,
+            Transition::Parsing => Transition::Parsing,
+            Transition::Success(output) => Transition::Success(mapper(output)),
+            Transition::Failure(recov) => Transition::Failure(RecovFailure {
+                output: mapper(recov.output),
+                errors: recov.errors,
+            }),
+            Transition::Fatal(fatal) => Transition::Fatal(fatal),
         }
     }
 
-    pub fn map_parser<F, Q>(self, mapper: F) -> Transition<Q, T, E>
-    where
-        F: FnOnce(P) -> Q,
-    {
-        match self {
-            Transition::Done { output } => Transition::Done { output },
-            Transition::Parsing { parser, error } => {
-                Transition::Parsing { parser: mapper(parser), error }
-            },
-        }
-    }
-
-    pub fn map_error<F, E1>(self, mapper: F) -> Transition<P, T, E1>
+    pub fn map_errors<F, E1>(self, mapper: F) -> Transition<A, E1>
     where
         F: FnOnce(E) -> E1,
     {
         match self {
-            Transition::Done { output } => Transition::Done { output },
-            Transition::Parsing { parser, error } => {
-                Transition::Parsing { parser, error: error.map(mapper) }
+            Transition::AlreadyDone => Transition::AlreadyDone,
+            Transition::Parsing => Transition::Parsing,
+            Transition::Success(output) => Transition::Success(output),
+            Transition::Failure(recov) => Transition::Failure(RecovFailure {
+                output: recov.output,
+                errors: mapper(recov.errors),
+            }),
+            Transition::Fatal(fatal) => {
+                Transition::Fatal(FatalFailure { errors: mapper(fatal.errors) })
             },
         }
     }
 }
 
-pub type TransitResult<P, I> = Result<
-    Transition<P, <P as Parser<I>>::Output, <P as Parser<I>>::Error>,
-    <P as Parser<I>>::Fatal,
->;
-
 pub trait Parser<I> {
     type Output;
-    type Error;
-    type Fatal;
+    type Errors: IntoIterator;
 
-    fn transit(self, input: I) -> TransitResult<Self, I>
-    where
-        Self: Sized;
+    fn transit(&mut self, input: I) -> Transition<Self::Output, Self::Errors>;
+}
 
-    fn map<F, T>(self, mapper: F) -> Map<Self, I, F, T>
-    where
-        Self: Sized,
-        F: FnOnce(Self::Output) -> T,
-    {
-        Map::new(self, mapper)
-    }
+impl<'this, T, I> Parser<I> for &'this mut T
+where
+    T: Parser<I> + ?Sized,
+{
+    type Output = T::Output;
+    type Errors = T::Errors;
 
-    fn map_input<F, J>(self, mapper: F) -> MapInput<Self, I, J, F>
-    where
-        Self: Sized,
-        F: FnMut(J) -> I,
-    {
-        MapInput::new(self, mapper)
-    }
-
-    fn map_error<F, E>(self, mapper: F) -> MapError<Self, I, F, E>
-    where
-        Self: Sized,
-        F: FnMut(Self::Error) -> E,
-    {
-        MapError::new(self, mapper)
-    }
-
-    fn map_fatal<F, Ef>(self, mapper: F) -> MapFatal<Self, I, F, Ef>
-    where
-        Self: Sized,
-        F: FnOnce(Self::Fatal) -> Ef,
-    {
-        MapFatal::new(self, mapper)
-    }
-
-    fn map_result<F, T, Ef>(self, mapper: F) -> MapResult<Self, I, F, T, Ef>
-    where
-        Self: Sized,
-        F: FnOnce(Result<Self::Output, Self::Fatal>) -> Result<T, Ef>,
-    {
-        MapResult::new(self, mapper)
-    }
-
-    fn error_into<E>(self) -> ErrorInto<Self, I, E>
-    where
-        Self: Sized,
-        E: From<Self::Error>,
-    {
-        ErrorInto::new(self)
-    }
-
-    fn fatal_into<Ef>(self) -> FatalInto<Self, I, Ef>
-    where
-        Self: Sized,
-        Ef: From<Self::Fatal>,
-    {
-        FatalInto::new(self)
+    fn transit(&mut self, input: I) -> Transition<Self::Output, Self::Errors> {
+        (**self).transit(input)
     }
 }
 
 impl<T, I> Parser<I> for Box<T>
 where
-    T: Parser<I>,
+    T: Parser<I> + ?Sized,
 {
     type Output = T::Output;
-    type Error = T::Error;
-    type Fatal = T::Fatal;
+    type Errors = T::Errors;
 
-    fn transit(self, input: I) -> TransitResult<Self, I> {
-        (*self).transit(input).map(|transition| transition.map_parser(Box::new))
-    }
-}
-
-pub trait BoxedParser<'obj, I>: Parser<I> {
-    fn transit_boxed(
-        self: Box<Self>,
-        input: I,
-    ) -> TransitResult<
-        DynParser<'obj, I, Self::Output, Self::Error, Self::Fatal>,
-        I,
-    >;
-
-    fn dyn_clone(
-        &self,
-    ) -> DynParser<'obj, I, Self::Output, Self::Error, Self::Fatal>;
-}
-
-impl<'obj, T, I> BoxedParser<'obj, I> for T
-where
-    T: Parser<I> + 'obj + Send + Sync + Clone,
-{
-    fn transit_boxed(
-        self: Box<Self>,
-        input: I,
-    ) -> TransitResult<
-        DynParser<'obj, I, Self::Output, Self::Error, Self::Fatal>,
-        I,
-    > {
-        (*self).transit(input).map(|transition| {
-            transition.map_parser(|parser| Box::new(parser) as _)
-        })
-    }
-
-    fn dyn_clone(
-        &self,
-    ) -> DynParser<'obj, I, Self::Output, Self::Error, Self::Fatal> {
-        Box::new(self.clone())
-    }
-}
-
-pub type DynParser<'obj, I, O, E, Ef> = Box<
-    dyn BoxedParser<'obj, I, Output = O, Error = E, Fatal = Ef>
-        + 'obj
-        + Send
-        + Sync,
->;
-
-impl<'obj, I, O, E, Ef> Parser<I> for DynParser<'obj, I, O, E, Ef> {
-    type Output = O;
-    type Error = E;
-    type Fatal = Ef;
-
-    fn transit(self, input: I) -> TransitResult<Self, I> {
-        self.transit_boxed(input)
-    }
-}
-
-impl<'obj, I, O, E, Ef> Clone for DynParser<'obj, I, O, E, Ef>
-where
-    I: 'obj,
-    O: 'obj,
-    E: 'obj,
-    Ef: 'obj,
-{
-    fn clone(&self) -> Self {
-        self.dyn_clone()
-    }
-}
-
-pub struct FnParser<F>(pub F);
-
-impl<F, I, T, E, Ef> Parser<I> for FnParser<F>
-where
-    F: FnMut(I) -> Result<Transition<(), T, E>, Ef>,
-{
-    type Output = T;
-    type Error = E;
-    type Fatal = Ef;
-
-    fn transit(mut self, input: I) -> TransitResult<Self, I> {
-        (self.0)(input).map(|transition| transition.map_parser(|_| self))
+    fn transit(&mut self, input: I) -> Transition<Self::Output, Self::Errors> {
+        (**self).transit(input)
     }
 }
